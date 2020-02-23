@@ -32,7 +32,7 @@ new Vue({
 				}
 			})
 			.catch(e => {
-				oastr.error('There was a problem loading frequencies from the database!!');
+				oastr.error('There was a problem loading data collection frequency from the database');
 				this.frequencies = [];
 			});
 	},
@@ -108,7 +108,7 @@ new Vue({
 					this.$validator.reset();
 				}
 			} catch (error) {
-				toastr.error('There was a problem saving your data!!');
+				toastr.error('There was a problem saving your data collection frequency');
 			}
 		},
 
@@ -137,7 +137,7 @@ new Vue({
 					this.toggleModal();
 				}
 			} catch (e) {
-				toastr.error('There was a problem updating your data!!');
+				toastr.error('There was a problem updating data collection frequency');
 			}
 		},
 
@@ -156,10 +156,10 @@ new Vue({
 					this.frequencies = this.frequencies.filter(item => +item.id !== +id);
 					this.showDeleteModal = !this.showDeleteModal;
 				} else {
-					toastr.error('There was a problem deleting frequency!!');
+					toastr.error('There was a problem deleting data collection frequency');
 				}
 			} catch (error) {
-				toastr.error('There was a server error!!');
+				toastr.error('There was a server error');
 			}
 		},
 
