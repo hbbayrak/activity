@@ -1,0 +1,13 @@
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: activity-app-${APPLICATION_ENV}
+  namespace: ${APPLICATION_ENV}
+spec:
+  rules:
+  - host: hikayaone.tk
+    http:
+      paths:
+      - backend:
+          serviceName: activity-app-service-${APPLICATION_ENV}
+          servicePort: 80

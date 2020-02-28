@@ -5,6 +5,7 @@ on:
     branches: 
       - dev
       - master
+      - ACT-609
   pull_request:
     branches: 
       - dev
@@ -36,3 +37,131 @@ jobs:
     - name: Test with Django Test
       run: |
         python manage.py test
+
+  create_infrastructure_dev:
+    runs-on: ubuntu-latest 
+    needs: build
+    if: github.ref == 'refs/heads/dev'
+    steps:
+    - uses: actions/checkout@v1
+    - name: Setup terraform
+      run: |
+        export VER="0.12.21"
+        wget https://releases.hashicorp.com/terraform/${VER}/terraform_${VER}_linux_amd64.zip
+        unzip terraform_${VER}_linux_amd64.zip
+        sudo mv terraform /usr/local/bin/
+        terraform version
+
+    - name: Run infrastructure script
+      env: 
+        BACKEND_BUCKET: ${{ secrets.BACKEND_BUCKET }}
+        STATE_FILE: ${{ secrets.STATE_FILE }}
+        SPACES_ACCESS_KEY: ${{ secrets.SPACES_ACCESS_KEY }}
+        SPACES_SECRET_KEY: ${{ secrets.SPACES_SECRET_KEY }}
+        CLUSTER_NAME: ${{ secrets.CLUSTER_NAME }}
+        CLUSTER_REGION: ${{ secrets.CLUSTER_REGION }}
+        K8S_VERSION: ${{ secrets.K8S_VERSION }}
+        NODE_TYPE: ${{ secrets.NODE_TYPE }}
+        MAX_NODE_NUM: ${{ secrets.MAX_NODE_NUM }}
+        MIN_NODE_NUM: ${{ secrets.MIN_NODE_NUM }}
+        SERVICE_ACCESS_TOKEN: ${{ secrets.SERVICE_ACCESS_TOKEN }}
+      
+      run: |
+        cd infrastructure
+        terraform init -backend-config "bucket=$BACKEND_BUCKET" -backend-config "key=$STATE_FILE" -backend-config "access_key=$SPACES_ACCESS_KEY" -backend-config "secret_key=$SPACES_SECRET_KEY"
+        terraform plan -lock=false -var "cluster_name=$CLUSTER_NAME" -var "cluster_region=$CLUSTER_REGION" -var "kubernetes_version=$K8S_VERSION" -var "node_type=$NODE_TYPE" -var "max_node_number=$MAX_NODE_NUM" -var "min_node_number=$MIN_NODE_NUM" -var "digital_ocean_token=$SERVICE_ACCESS_TOKEN"
+        # terraform apply -lock=false -auto-approve  -var "cluster_name=$CLUSTER_NAME" -var "cluster_region=$CLUSTER_REGION" -var "kubernetes_version=$K8S_VERSION" -var "node_type=$NODE_TYPE" -var "max_node_number=$MAX_NODE_NUM" -var "min_node_number=$MIN_NODE_NUM" -var "digital_ocean_token=$SERVICE_ACCESS_TOKEN" || echo "__infrastructure exists__"
+        terraform destroy -lock=false -auto-approve  -var "cluster_name=$CLUSTER_NAME" -var "cluster_region=$CLUSTER_REGION" -var "kubernetes_version=$K8S_VERSION" -var "node_type=$NODE_TYPE" -var "max_node_number=$MAX_NODE_NUM" -var "min_node_number=$MIN_NODE_NUM" -var "digital_ocean_token=$SERVICE_ACCESS_TOKEN" || echo "__infrastructure 404__"
+
+  Build_and_push_image:
+    runs-on: ubuntu-latest 
+    needs: create_infrastructure_dev
+    if: github.ref == 'refs/heads/dev'
+    steps:
+    - uses: actions/checkout@v1 
+    - name: Setup docker-ce
+      run: |
+        sudo apt install apt-transport-https ca-certificates curl software-properties-common
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+        sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable"
+        sudo apt install docker-ce
+        sudo docker version
+  
+    - name: Auth to docker hub 
+      env:
+        DOCKER_HUB_USERNM: ${{ secrets.DOCKER_HUB_USERNM }}
+        DOCKER_HUB_PASSWD: ${{ secrets.DOCKER_HUB_PASSWD }}
+      run: |
+        echo "+++++++ Login to docker hub ++++++"
+        docker login -p=$DOCKER_HUB_PASSWD -u=$DOCKER_HUB_USERNM
+        echo "--------Login Done!! -------------"
+
+    - name: Generate image env vars 
+      env:
+        ACTIVITY_CE_DB_NAME_DEV: ${{ secrets.ACTIVITY_CE_DB_NAME_DEV }}
+        ACTIVITY_CE_DB_USER_DEV: ${{ secrets.ACTIVITY_CE_DB_USER_DEV }}
+        ACTIVITY_CE_DB_PASSWORD_DEV: ${{ secrets.ACTIVITY_CE_DB_PASSWORD_DEV }}
+        ACTIVITY_CE_DB_HOST_DEV: ${{ secrets.ACTIVITY_CE_DB_HOST_DEV }}
+        SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        DEBUG: ${{ secrets.DEBUG }}
+        DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
+        DB_ENGINE: ${{ secrets.DB_ENGINE }}
+        ACTIVITY_CE_DB_PORT: ${{ secrets.ACTIVITY_CE_DB_PORT }}
+        APPLICATION_ENV: ${{ secrets.APPLICATION_ENV }}
+      run: |
+        echo "++++++++Export env vars ++++++++++"
+        touch .env.deploy
+
+        echo export ACTIVITY_CE_DB_NAME=${ACTIVITY_CE_DB_NAME_DEV} >> .env.deploy
+        echo export ACTIVITY_CE_DB_USER=${ACTIVITY_CE_DB_USER_DEV} >> .env.deploy
+        echo export ACTIVITY_CE_DB_PASSWORD=${ACTIVITY_CE_DB_PASSWORD_DEV} >> .env.deploy
+        echo export ACTIVITY_CE_DB_HOST=${ACTIVITY_CE_DB_HOST_DEV} >> .env.deploy
+        echo export SECRET_KEY=${SECRET_KEY} >> .env.deploy
+        echo export DEBUG=${DEBUG} >> .env.deploy
+        echo export DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS} >> .env.deploy
+        echo export DB_ENGINE=${DB_ENGINE} >> .env.deploy
+        echo export ACTIVITY_CE_DB_PORT=${ACTIVITY_CE_DB_PORT} >> .env.deploy
+  
+    - name: Build and push dev env image
+      env:
+        DOCKER_HUB_USERNM: ${{ secrets.DOCKER_HUB_USERNM }}
+        APPLICATION_ENV: ${{ secrets.APPLICATION_ENV }}
+      run: | 
+        echo "++++++++++++ Build docker image ++++++++++"
+        sudo docker build -t $DOCKER_HUB_USERNM/activity:$APPLICATION_ENV-$GITHUB_SHA -f docker-deploy/Dockerfile .
+        echo "++++++++++++++ Push Image ++++++++++++++++++"
+        sudo docker push $DOCKER_HUB_USERNM/activity:$APPLICATION_ENV-$GITHUB_SHA
+
+    - name: DockerHub logout
+      run: |
+        echo "___======= Docker Logout ======________"
+        sudo docker logout
+
+  Deploy_to_dev_env:
+    needs: Build_and_push_image
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Setup kubectl
+      env:
+        APPLICATION_ENV: ${{ secrets.APPLICATION_ENV }}
+        CLUSTER_NAME: ${{ secrets.CLUSTER_NAME }}
+        SERVICE_ACCESS_TOKEN: ${{ secrets.SERVICE_ACCESS_TOKEN }}
+      run: |
+        echo "++++++++++++ install kubectl ++++++++++++"
+        curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
+        chmod +x ./kubectl
+        sudo mv ./kubectl /usr/local/bin/kubectl
+        kubectl version --client
+        sudo snap install doctl
+        sudo snap connect doctl:kube-config
+        pwd
+        sudo mkdir /root/.config
+        sudo mkdir /root/.kube
+        echo "++++++ auth doctl +++++++"
+        sudo doctl -t $SERVICE_ACCESS_TOKEN kubernetes cluster kubeconfig save $CLUSTER_NAME
+        # sudo doctl auth init -t $SERVICE_ACCESS_TOKEN
+        # sudo kubectl create namespace $APPLICATION_ENV || echo "++++++ Namespace Exists ++++++"
+        # # fetch cluster nodes
+        sudo kubectl get nodes

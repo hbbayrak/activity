@@ -92,3 +92,8 @@ db.sqlite3
 .idea/
 .vscode
 .history/
+
+# Terraform state files
+.terraform
+infrastructure/terraform.tfstate
+terraform.tfstate.backup
